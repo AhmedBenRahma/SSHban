@@ -1,0 +1,27 @@
+# Dataset files (too large for Git)
+*.csv
+*.pcap
+
+# Trained model artifacts
+*.pkl
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Streamlit config
+.streamlit/
+
+# Live analysis output files
+alertes.csv
+flow_en_direct.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
