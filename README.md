@@ -1,231 +1,255 @@
-# 🛡️ SSH Brute Force Attack Detection Using AI
+# SSHban — Real-Time SSH Brute-Force Detection
 
-![Python](https://img.shields.io/badge/Python-3.x-blue)
-![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-RandomForest-orange)
-![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-red)
-![Dataset](https://img.shields.io/badge/Dataset-CICIDS2017-green)
-![Accuracy](https://img.shields.io/badge/Accuracy-100%25-brightgreen)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![scikit-learn](https://img.shields.io/badge/scikit--learn-Random%20Forest-F7931E?logo=scikitlearn&logoColor=white)](https://scikit-learn.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Live%20Dashboard-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Dataset](https://img.shields.io/badge/Dataset-CICIDS2017-2E8B57)](https://www.unb.ca/cic/datasets/ids-2017.html)
+[![Recall](https://img.shields.io/badge/Attack%20Recall-99%25-brightgreen)]()
+[![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-> **Academic Cybersecurity Project** — Real-time detection of SSH brute force attacks using Machine Learning (Random Forest) with a live Streamlit dashboard.
+**A network-flow intrusion detector that spots SSH brute-force attacks from traffic
+behaviour instead of failed-login counters, and raises alerts on a live dashboard
+within seconds.**
+
+Trained on CICIDS2017, validated end to end against real Hydra attacks launched
+from a Kali Linux VM against a Windows 11 OpenSSH host.
 
 ---
 
-## 📋 Description
+## Table of contents
 
-This project detects **SSH brute force attacks** in real time using a **Random Forest** classifier trained on the **CICIDS2017** dataset. When an attacker (Kali Linux VM) launches a brute force attack via Hydra against a Windows 11 host, the system automatically detects it and displays a live alert on the dashboard.
+- [Why this project](#why-this-project)
+- [Demo](#demo)
+- [How it works](#how-it-works)
+- [Detection model](#detection-model)
+- [Results](#results)
+- [Quickstart](#quickstart)
+- [Repository layout](#repository-layout)
+- [Limitations and next steps](#limitations-and-next-steps)
+- [Tech stack](#tech-stack)
+- [References](#references)
 
-### Architecture
+---
 
+## Why this project
+
+SSH on a public IP gets hit constantly. The usual defence — `fail2ban` and friends —
+counts failed logins per IP and bans past a threshold. That works against noisy
+attacks and fails against the quiet ones: an attacker who spreads attempts across
+many source IPs, or paces them below the ban window, never trips the counter.
+
+This project takes a different signal. Instead of counting logins, it classifies
+the **shape of the network flow** — duration, packet counts, byte rates,
+inter-arrival timing. A brute-force session looks different from a human SSH
+session at the flow level, whatever the retry rate, so detection does not depend
+on a threshold an attacker can measure and stay under.
+
+The scope is honest: this is a detection pipeline built and validated in a lab,
+not a hardened production IDS. What it demonstrates is the full path from a public
+research dataset to a model scoring live traffic and raising an alert a human can act on.
+
+## Demo
+
+![Live alert dashboard showing nine SSH brute-force detections from a single source IP](docs/dashboard.png)
+
+*`dashboard.py` during an attack — the banner carries the most recent detection, the
+table below it the running alert feed. Source IP `205.174.165.73` is the attacker
+host from the CICIDS2017 capture.*
+
+📹 Full screen recording of a live Hydra attack being detected:
+**[demo attaque ssh.mp4](demo%20attaque%20ssh.mp4)**
+
+## How it works
+
+```mermaid
+flowchart TD
+    A["Kali Linux VM — Hydra brute force"] -->|"SSH :22"| B["Windows 11 host — OpenSSH enabled"]
+    B --> C["CICFlowMeter — packets to flow records"]
+    C --> D["live_analyzer.py — scores each new flow with model.pkl"]
+    D -->|"benign"| E["no action"]
+    D -->|"attack"| F["alertes.csv — time, attack type, source IP"]
+    F --> G["dashboard.py — Streamlit live alert feed"]
 ```
-Kali Linux (VMware NAT)
-        |
-        |  SSH Brute Force (Hydra)
-        ▼
-Windows 11 Host (OpenSSH enabled)
-        |
-        |  Event Logs / Network Flows
-        ▼
-live_analyzer.py  ──►  Random Forest Model (99% recall)
-        |
-        |  alertes.csv
-        ▼
-Streamlit Dashboard (localhost:8501)
-        |
-        ▼
-  🚨 LIVE ALERT DISPLAYED
-```
 
----
+Two detection paths are included:
 
-## 📊 Dataset
+| Path | Entry point | Signal | Use it when |
+|------|-------------|--------|-------------|
+| **Flow-based (main)** | `live_analyzer.py` → `dashboard.py` | Network flow features scored by the trained model | You have CICFlowMeter producing live flow records |
+| **Log-based** | `ids_dashboard.py` | Windows `OpenSSH/Operational` event log read over PowerShell | You want host-side visibility without a flow exporter |
 
-- **Source:** [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html) — Canadian Institute for Cybersecurity
-- **File used:** `Tuesday-WorkingHours.pcap_ISCX.csv`
-- **Citation:** Iman Sharafaldin, Arash Habibi Lashkari, and Ali A. Ghorbani, *"Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization"*, ICISSP 2018.
+The flow-based path is the one the model serves. The log-based dashboard is a
+complementary host view: it reads failed-authentication events directly, charts
+attempts per minute, and flags a network status of `SÉCURISÉ` / `ALERTE` /
+`CRITIQUE` from the failure count.
 
-| Label | Count |
-|-------|-------|
-| BENIGN | 432,074 |
-| SSH-Patator | 5,897 |
-| FTP-Patator | 7,938 |
+## Detection model
 
----
+**Dataset** — [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html),
+`Tuesday-WorkingHours.pcap_ISCX.csv`, filtered to two classes:
 
-## 🤖 Model Performance
+| Class | Flows | Share |
+|-------|------:|------:|
+| BENIGN | 432,074 | 98.7% |
+| SSH-Patator (attack) | 5,897 | 1.3% |
 
-| Metric | Normal | SSH-Patator |
-|--------|--------|-------------|
+**Features** — 11 flow statistics, chosen because they describe *rhythm and volume*
+rather than payload, so the model never needs to decrypt anything:
+
+| Group | Features |
+|-------|----------|
+| Volume | `Total Fwd Packets`, `Total Backward Packets`, `act_data_pkt_fwd` |
+| Rate | `Flow Bytes/s`, `Flow Packets/s` |
+| Size | `Average Packet Size`, `Avg Fwd Segment Size`, `Init_Win_bytes_forward` |
+| Timing | `Flow Duration`, `Flow IAT Mean`, `Fwd IAT Mean` |
+
+**Training** — `RandomForestClassifier(n_estimators=100, random_state=42)`, on an
+80/20 stratified split, with infinite and missing values dropped before fitting.
+Training takes roughly 30 seconds on a laptop CPU.
+
+## Results
+
+Held-out test set — 87,542 flows:
+
+| Metric | Benign | SSH-Patator |
+|--------|-------:|------------:|
 | Precision | 100% | 100% |
 | Recall | 100% | 99% |
-| F1-Score | 100% | 100% |
-| **Global Accuracy** | **100%** | |
+| F1-score | 100% | 100% |
 
-**Confusion Matrix:**
-```
-[[86361    2]
- [    6 1173]]
-```
+**Confusion matrix**
 
-**Features used (11):**
-- Flow Duration
-- Total Fwd Packets
-- Total Backward Packets
-- Flow Bytes/s
-- Flow Packets/s
-- Average Packet Size
-- Avg Fwd Segment Size
-- Init_Win_bytes_forward
-- act_data_pkt_fwd
-- Flow IAT Mean
-- Fwd IAT Mean
+|  | Predicted benign | Predicted attack |
+|---|---:|---:|
+| **Actual benign** | 86,361 | 2 |
+| **Actual attack** | 6 | 1,173 |
 
----
+Two false alarms in 86,363 benign flows, and 6 attack flows missed out of 1,179.
+In operational terms: an analyst using this would see roughly one false alert per
+43,000 benign connections, and a brute-force session — which produces many flows,
+not one — would have to go 6-for-6 unlucky to pass unnoticed.
 
-## 🗂️ Project Structure
+> **Read these numbers with care.** They come from a single capture day of one
+> public dataset, where SSH-Patator traffic is generated by a tool and is cleanly
+> separable. Scores this high say the dataset is easy, not that the problem is
+> solved — see [Limitations](#limitations-and-next-steps).
 
-```
-ssh-bruteforce-detection/
-├── README.md
-├── requirements.txt
-├── .gitignore
-├── src/
-│   ├── model.py            # Train & save the Random Forest model
-│   ├── dashboard.py        # Streamlit dashboard (3 tabs)
-│   ├── live_analyzer.py    # Real-time flow analyzer
-│   └── simulate_attack.py  # Attack simulator for demo
-├── utils/
-│   ├── check_columns.py    # Inspect dataset columns
-│   └── test.py             # Quick label check
-├── models/
-│   └── .gitkeep            # model.pkl generated here after training
-└── data/
-    └── .gitkeep            # Place CICIDS2017 CSV here
-```
+## Quickstart
 
----
-
-## ⚙️ Installation
+**Prerequisites** — Python 3.10+, and [CICFlowMeter](https://github.com/ahlashkari/CICFlowMeter)
+if you want to score live traffic rather than the simulator.
 
 ```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/ssh-bruteforce-detection.git
-cd ssh-bruteforce-detection
-
-# Install dependencies
+git clone https://github.com/AhmedBenRahma/SSHban.git
+cd SSHban
 pip install -r requirements.txt
 ```
 
----
+**1. Train the model**
 
-## 🚀 Usage
+Download `Tuesday-WorkingHours.pcap_ISCX.csv` from
+[CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html) into the repository root, then:
 
-### Step 1 — Download the dataset
-Download `Tuesday-WorkingHours.pcap_ISCX.csv` from [CICIDS2017](https://www.unb.ca/cic/datasets/ids-2017.html) and place it in the `data/` folder.
-
-### Step 2 — Train the model
 ```bash
-python src/model.py
+python model.py
 ```
-This generates `model.pkl` and `features.pkl` in the `models/` folder.
 
-### Step 3 — Launch the dashboard
+Writes `model.pkl` and `features.pkl`, and prints the classification report and
+confusion matrix above.
+
+**2. Start the live analyzer**
+
 ```bash
-streamlit run src/dashboard.py
+python live_analyzer.py
 ```
-Open your browser at `http://localhost:8501`
 
-### Step 4 — Launch the live analyzer
+Polls `flow_en_direct.csv` every 2 seconds, scores new flow records, and appends
+any detection to `alertes.csv` as `time, attack type, source IP`.
+
+**3. Start the dashboard** (separate terminal)
+
 ```bash
-# In a separate terminal
-python src/live_analyzer.py
+streamlit run dashboard.py     # flow-based alert feed
+# or
+streamlit run ids_dashboard.py # host-side OpenSSH event log view (Windows)
 ```
 
-### Step 5 — Simulate or launch a real attack
+Open <http://localhost:8501>.
 
-**Option A — Simulation (no Kali needed):**
+**4. Trigger an attack**
+
 ```bash
-python src/simulate_attack.py
+# Option A — simulator, no VM needed: writes benign flows then attack flows
+python simulate_attack.py
+
+# Option B — real attack from Kali Linux
+hydra -l administrator -P /usr/share/wordlists/rockyou.txt ssh://<WINDOWS_IP>
 ```
 
-**Option B — Real attack from Kali Linux:**
-```bash
-hydra -l administrator -P /usr/share/wordlists/rockyou.txt ssh://WINDOWS_IP
-```
+The alert appears on the dashboard within one polling cycle.
 
-### Step 6 — Watch the alert appear on the dashboard 🚨
-
----
-
-## 🖥️ Environment
-
-| Component | Details |
-|-----------|---------|
-| Attacker | Kali Linux (VMware NAT) |
-| Victim | Windows 11 (OpenSSH enabled) |
-| Detection | Python 3.x on Windows 11 |
-| Dashboard | Streamlit — localhost:8501 |
-
----
-
-## 🛠️ Tech Stack
-
-- **Python 3.x**
-- **pandas** — data manipulation
-- **scikit-learn** — Random Forest model
-- **streamlit** — live dashboard
-- **matplotlib / seaborn** — visualizations
-- **numpy** — numerical processing
-
----
-
-## 📁 requirements.txt
+## Repository layout
 
 ```
-pandas
-numpy
-scikit-learn
-streamlit
-matplotlib
-seaborn
+SSHban/
+├── model.py              # Train the Random Forest, print metrics, save model.pkl + features.pkl
+├── live_analyzer.py      # Score live flow records, append detections to alertes.csv
+├── dashboard.py          # Streamlit dashboard: live alert feed
+├── ids_dashboard.py      # Streamlit dashboard: Windows OpenSSH event log view + attacks/minute chart
+├── simulate_attack.py    # Generate benign then attack flow records, for demo without a VM
+├── check_columns.py      # Inspect CICIDS2017 column names
+├── test.py               # Quick label sanity check
+├── model.pkl             # Trained classifier (regenerate with model.py)
+├── features.pkl          # Feature list used at train and inference time
+└── demo attaque ssh.mp4  # Screen recording of a detected attack
 ```
 
----
+## Limitations and next steps
 
-## 🔒 .gitignore
+Stated plainly, because a detector nobody has stress-tested is a detector nobody
+should trust:
 
-```
-*.csv
-*.pkl
-*.pcap
-__pycache__/
-.streamlit/
-*.pyc
-alertes.csv
-flow_en_direct.csv
-```
+- **Single-dataset evaluation.** One capture day, one attack tool (Patator).
+  Generalisation to other tools and networks is untested — the next step is
+  cross-day and cross-dataset validation.
+- **Class imbalance.** Attacks are 1.3% of flows, so accuracy is a flattering
+  metric; recall and precision on the attack class are the ones that matter, which
+  is why they are reported separately above.
+- **Slow and distributed attacks are unproven.** The evaded-threshold argument in
+  [Why this project](#why-this-project) is the motivation, not yet a measured
+  result. Testing against rate-limited Hydra runs is the obvious experiment.
+- **The simulator uses extreme values.** `simulate_attack.py` writes deliberately
+  saturated feature values, so it proves the plumbing end to end, not the model's
+  discrimination. Use real captured flows to judge accuracy.
+- **Detection only, no response.** No automatic blocking. Wiring detections to a
+  firewall rule (Windows Firewall, `iptables`) is the natural next feature.
+- **Feature drift across CICFlowMeter versions.** Column names differ between
+  releases; `check_columns.py` exists to catch that before it silently breaks
+  inference.
 
----
+## Tech stack
 
-## 👨‍🎓 Academic Context
+| Layer | Technology |
+|-------|-----------|
+| Model | scikit-learn (Random Forest) |
+| Data | pandas, numpy, CICIDS2017 |
+| Flow capture | CICFlowMeter |
+| Dashboards | Streamlit, Plotly |
+| Attack generation | Hydra on Kali Linux |
+| Target host | Windows 11 with OpenSSH Server |
 
-This project was developed as part of an academic **Cybersecurity** course. It demonstrates:
-- Real-world dataset usage (CICIDS2017)
-- Supervised machine learning for intrusion detection
-- Real-time monitoring with a professional dashboard
-- Attack simulation in an isolated virtual environment
+## References
 
----
+- Sharafaldin, I., Lashkari, A. H., & Ghorbani, A. A. (2018). *Toward Generating a
+  New Intrusion Detection Dataset and Intrusion Traffic Characterization.* ICISSP.
+- [CICIDS2017 dataset](https://www.unb.ca/cic/datasets/ids-2017.html) — Canadian
+  Institute for Cybersecurity
+- [CICFlowMeter](https://github.com/ahlashkari/CICFlowMeter) — network flow feature extractor
 
-## 📄 License
+## Author
 
-MIT License — feel free to use and adapt for educational purposes.
+**Ahmed Ben Rahma** — Software Engineering student at ENSI, Tunisia.
+[LinkedIn](https://www.linkedin.com/in/ahmed-ben-rahma-183725329/) ·
+[GitHub](https://github.com/AhmedBenRahma)
 
----
-
-## 🙏 References
-
-- Sharafaldin, I., Lashkari, A. H., & Ghorbani, A. A. (2018). *Toward Generating a New Intrusion Detection Dataset and Intrusion Traffic Characterization*. ICISSP.
-- [CICIDS2017 Dataset](https://www.unb.ca/cic/datasets/ids-2017.html)
-- [Scikit-learn Documentation](https://scikit-learn.org)
-- [Streamlit Documentation](https://docs.streamlit.io)
+Built as an academic cybersecurity project. Released under the MIT License.
