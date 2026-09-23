@@ -1,0 +1,19 @@
+# runtime artifacts
+alerts.csv
+flow_en_direct.csv
+*.log
+
+# datasets (download separately — see docs/DATASET.md)
+Tuesday-WorkingHours.pcap_ISCX.csv
+*.pcap
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.DS_Store

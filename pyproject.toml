@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sshban"
+version = "1.0.0"
+description = "Network-flow detection of SSH brute-force attacks (behaviour, not login counters)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ahmed Ben Rahma" }]
+keywords = ["security", "intrusion-detection", "ssh", "brute-force", "machine-learning", "cicids2017"]
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "streamlit>=1.30",
+    "plotly>=5.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+sshban = "sshban.cli:main"
+
+[tool.setuptools]
+packages = ["sshban", "sshban.dashboards"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
